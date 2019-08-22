@@ -1,0 +1,4 @@
+22 Aug 2019
+Added a more complex cipher formulation that uses distinct metaciphers for deriving the displacement values (rather than re-using target selection metaciphers)
+Improved the description, added some considerations about security and design
+Fixed a few bugs

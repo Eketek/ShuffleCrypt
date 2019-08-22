@@ -9,10 +9,11 @@ class SCCipher:
   OPMODE_SINGLE_WITHIV=2        # reset and apply the most recent IV before encrypting or decrypting (random IV if none).
   OPMODE_SINGLE_WITHRANDIV=3    # reset and set a random IV before encrypting or decrypting.
   
-  # MetaCipher operand displacement settings (SCCipher.mc_dispmode)
+  # MetaCipher operand displacement modes (SCCipher.mc_dispmode)  (the mechanism that conceals metacipher sums)
   DISPMODE_TRUNCATED_BINARY=0   # operand displacement:  mc_dispconst + (displacement & mc_dispmask)
   DISPMODE_BINARY=1             # operand displacement:  mc_dispconst + displacement
   DISPMODE_CONSTANT=2           # operand displacement:  mc_dispconst
+  DISPMODE_SEPMC=3              # operand displacement:  compute other metaciphers to generate a displacement value
   
   # Format to use for printing (SCCipher.printformat, SCCipher.outputformat) and/or for output (applied IVs, returned values from SCCipher.encrypt() and SCCipher.decrypt())
   FORMAT_TEXT=0
@@ -50,6 +51,7 @@ class SCCipher:
       self.key = self.alphabet      
     self.setKey()    
     self.metacipher = [[0, 1,2],[1, -2,-3]]  # defineMetacipher() and removeMetacipher() are preferred for editing this...
+    self.offsetmetacipher = [[0,3,4], [1,-4,-5]]
         
   def clone(self):
     other = SCCipher(self.alphabet, self.key)
@@ -72,6 +74,9 @@ class SCCipher:
     other.metacipher = []
     for mc in self.metacipher:
       other.metacipher.append(list(mc))
+    other.offsetmetacipher = []
+    for mc in self.offsetmetacipher:
+      other.offsetmetacipher.append(list(mc))
     
     return other
 
@@ -270,6 +275,15 @@ class SCCipher:
       self.metacipher.append(secondary_offsets)
     print(str(self.metacipher))
     
+    self.offsetmetacipher = []
+    for mainofs in [0,1]:
+      secondary_offsets = list(range(min_sec_ofs, max_sec_ofs+1))
+      shuffle(secondary_offsets)
+      secondary_offsets = secondary_offsets[:num_offsets]
+      self.offsetmetacipher.append(secondary_offsets)
+    if self.mc_dispmode == SCCipher.DISPMODE_SEPMC:
+      print(str(self.offsetmetacipher))
+    
   def randomCrazy(self, num_secondary_operands=3, num_offsets=8, min_main_ofs=-6, max_main_ofs=6, min_sec_ofs=-6, max_sec_ofs=6):
     main_offsets = list(range(min_main_ofs,0))
     main_offsets.extend(range(2, max_main_ofs+1))
@@ -283,7 +297,22 @@ class SCCipher:
       shuffle(secondary_offsets)
       secondary_offsets = secondary_offsets[:num_offsets]
       self.metacipher.append(secondary_offsets)
+      
     print(str(self.metacipher))
+    main_offsets = list(range(min_main_ofs,0))
+    main_offsets.extend(range(2, max_main_ofs+1))
+    shuffle(main_offsets)
+    main_offsets = main_offsets[:num_secondary_operands]
+    main_offsets.append(0)
+    main_offsets.append(1)
+    self.offsetmetacipher = []
+    for mainofs in main_offsets:
+      secondary_offsets = list(range(min_sec_ofs, max_sec_ofs+1))
+      shuffle(secondary_offsets)
+      secondary_offsets = secondary_offsets[:num_offsets]
+      self.offsetmetacipher.append(secondary_offsets)
+    if self.mc_dispmode == SCCipher.DISPMODE_SEPMC:
+      print(str(self.offsetmetacipher))
   
   def defineMetacipher(self, operandOFS, *offsets):
     if len(offsets) == 0:
@@ -301,12 +330,29 @@ class SCCipher:
       if mc[0] == operandOFS:
         self.metacipher.remove(mc)
         break
+        
+  def defineOfsetMetacipher(self, operandOFS, *offsets):
+    if len(offsets) == 0:
+      return          
+    removeOfsMetacipher(operandOFS)
+    mc = [operandOFS]
+    self.ofsmetacipher.append(mc)
+    if isinstance(offsets[0], list):
+      mc.extend(offsets[0])
+    else:
+      mc.extend(offsets)
+      
+  def removeOffsetMetacipher(self, operandOFS): 
+    for mc in self.ofsmetacipher:
+      if mc[0] == operandOFS:
+        self.ofsmetacipher.remove(mc)
+        break
   
   # feed a plaintext data to the system, but do nothing with the result
   def digest(self, pDATA):
     literals = []
     if isinstance(pDATA, str):
-      for char in pTXT:
+      for char in pDATA:
         PTval = self.lexvalues.get(char)
         if PTval != None:
           PTpos = self.state.index(PTval)
@@ -321,7 +367,7 @@ class SCCipher:
     for MCentry in self.metacipher:  
       MCmainofs = MCentry[0]
       MCpos = (PTpos+MCmainofs) % self.klen
-      MCentry = self.metacipher[MCmainofs]
+      # MCentry = self.metacipher[MCmainofs]
       MCoperand = self.state[MCpos]
       MCtarget = 0
       MCdisplacement = 0
@@ -332,12 +378,21 @@ class SCCipher:
         MCdisplacement <<= 1
         MCdisplacement |= (symbolval > prevsymbolval)
       MCtarget %= self.klen
-      MCtransfers.append([MCoperand, MCtarget, MCdisplacement])
+      if self.mc_dispmode == SCCipher.DISPMODE_SEPMC:
+        MCdisplacement = 0
+        for OFSMCentry in self.offsetmetacipher: 
+          if MCmainofs != OFSMCentry[0]:
+            continue
+          for i in range(1, len(OFSMCentry)):
+            MCdisplacement += self.state[ (MCpos+OFSMCentry[i])%self.klen ]
+          MCdisplacement %= self.klen
+      MCtransfers.append([MCmainofs, MCoperand, MCtarget, MCdisplacement])
     
     for transfer in MCtransfers:
-      MCoperand = transfer[0]
-      MCtarget = transfer[1]
-      MCdisplacement = transfer[2]
+      MCmainofs = transfer[0]
+      MCoperand = transfer[1]
+      MCtarget = transfer[2]
+      MCdisplacement = transfer[3]
       
       if self.mc_dispmode == SCCipher.DISPMODE_CONSTANT:
         MCdisplacement = self.mc_dispconst
@@ -345,6 +400,9 @@ class SCCipher:
         MCdisplacement += self.mc_dispconst
       elif self.mc_dispmode == SCCipher.DISPMODE_TRUNCATED_BINARY:
         MCdisplacement = self.mc_dispconst + MCdisplacement & self.mc_dispmask
+      # if self.mc_dispmode == SCCipher.DISPMODE_SEPMC:
+        # Use MCdisplacement as-is
+        
       
       MCoperandpos = self.state.index(MCoperand)
       MCtargetpos = (self.state.index(MCtarget)+MCdisplacement)%self.klen
@@ -357,9 +415,11 @@ class SCCipher:
         MCtargetpos -= 1
       self.state.remove(MCoperand)
       self.state.insert(MCtargetpos, MCoperand)
-        
-
-print("""ShuffleCrypt test script loaded. 
+      
+      
+      
+  def intro():  
+    print("""ShuffleCrypt test script loaded. 
 ShuffleCrypt is an oddball cryptosystem which [at least until a reasonable cryptanalysis can be undertaken] you would we well-advised not to use for any serious purpose.
 
   BASIC USAGE:
@@ -395,5 +455,11 @@ ShuffleCrypt is an oddball cryptosystem which [at least until a reasonable crypt
   RANDOM METACIPHER GENERATORS:
   cipher.random2Symbol()                 # Set up a pair of random metaciphers with relatively modest parameterization (something like the envisioned setup)
   cipher.randomCrazy()                   # Set up a quintet of much more random metaciphers
-  
-""")
+    
+  # MetaCipher operand displacement modes (SCCipher.mc_dispmode)  (the mechanism that conceals metacipher sums)
+  DISPMODE_TRUNCATED_BINARY=0   # operand displacement:  mc_dispconst + (displacement & mc_dispmask)
+  DISPMODE_BINARY=1             # operand displacement:  mc_dispconst + displacement
+  DISPMODE_CONSTANT=2           # operand displacement:  mc_dispconst
+  DISPMODE_SEPMC=3              # operand displacement:  compute other metaciphers to generate a displacement value""")
+
+SCCipher.intro()
