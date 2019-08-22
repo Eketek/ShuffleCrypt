@@ -63,7 +63,7 @@ This project contains a single python script with a test implementation of the c
   cipher.randomCrazy()                   # Set up a quintet of much more random metaciphers
   
   
-  # MetaCipher operand displacement modes (SCCipher.mc_dispmode)  (the mechanism that conceals metacipher sums)
+  MetaCipher operand displacement modes (SCCipher.mc_dispmode)  (the mechanism that conceals metacipher sums)
     DISPMODE_TRUNCATED_BINARY=0   # operand displacement:  mc_dispconst + (displacement & mc_dispmask)
     DISPMODE_BINARY=1             # operand displacement:  mc_dispconst + displacement
     DISPMODE_CONSTANT=2           # operand displacement:  mc_dispconst
